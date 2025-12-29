@@ -164,7 +164,6 @@ async def translate_neatly(
             was_401 = False
             code_401_text: list[str] = []
             for page_list_i, page_list in enumerate(pages["list"]):
-                # 102 Choices (dont nestly translate) (ex: [["yes", "no"], 1, 0, 2, 0])
                 if was_401 and page_list["code"] != 401:
                     text = " ".join(code_401_text)
                     if not text:
@@ -180,10 +179,11 @@ async def translate_neatly(
                             text_neat = text_tr
                         for text_it, j in enumerate(
                             range(
-                                page_list_i - 1 - len(code_401_text),
-                                page_list_i - 1,
+                                page_list_i - len(code_401_text),
+                                page_list_i,
                             )
                         ):
+                            print(j)
                             translations += 1
                             if text_it >= len(
                                 text_neat
@@ -198,6 +198,10 @@ async def translate_neatly(
                             pages["list"][j]["parameters"][0] = text_neat[
                                 text_it
                             ]
+                        print()
+                    was_401 = False
+                    code_401_text = []
+                # 102 Choices (dont nestly translate) (ex: [["yes", "no"], 1, 0, 2, 0])
                 if page_list["code"] == 102:
                     # null or empty list check
                     if not page_list["parameters"][0]:
