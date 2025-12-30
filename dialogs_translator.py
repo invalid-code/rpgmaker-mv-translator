@@ -157,10 +157,7 @@ async def translate_neatly(
                 if not text:
                     return
                 # translate
-                print(code_401_text)
                 text_tr, success = await try_translate_sentence(text)
-                print(code_401_text)
-                print()
                 if (not success) or (text_tr is None):
                     print("Anomaly: {}".format(text))
                 else:
@@ -420,18 +417,6 @@ async def main():
             tg.create_task(translate_file(file))
     print("\ndone! translated in total {} dialog windows".format(translations))
 
-
-# usage: python dialogs_translator.py --print_neatly --source_lang it --dest_lang en
-if __name__ == "__main__":
-    asyncio.run(main())
-
-# usage: python dialogs_translator.py --print_neatly --source_lang it --dest_lang en
-if __name__ == "__main__":
-    asyncio.run(main())
-
-# usage: python dialogs_translator.py --print_neatly --source_lang it --dest_lang en
-if __name__ == "__main__":
-    asyncio.run(main())
 
 # usage: python dialogs_translator.py --print_neatly --source_lang it --dest_lang en
 if __name__ == "__main__":
