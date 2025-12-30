@@ -125,7 +125,6 @@ async def translate(
 async def translate_neatly(
     file_path, tr, src="it", dst="en", verbose=False, max_len=40, max_retries=5
 ):
-
     async def translate_sentence(text):
         target = text
         translation = (await tr.translate(target, src=src, dest=dst)).text
@@ -150,7 +149,104 @@ async def translate_neatly(
                     pass
             return (text, False)
 
+    async def translate_list(page_list, page_list_i: int):
+        nonlocal translations, code_401_text, was_401
+        async with translate_neatly_lock:
+            if was_401 and page_list["code"] != 401:
+                text = " ".join(code_401_text)
+                if not text:
+                    return
+                # translate
+                print(code_401_text)
+                text_tr, success = await try_translate_sentence(text)
+                print(code_401_text)
+                print()
+                if (not success) or (text_tr is None):
+                    print("Anomaly: {}".format(text))
+                else:
+                    try:
+                        text_neat = print_neatly(text_tr, max_len)
+                    except:
+                        text_neat = text_tr
+                    for text_it, j in enumerate(
+                        range(
+                            page_list_i - len(code_401_text),
+                            page_list_i,
+                        )
+                    ):
+                        translations += 1
+                        if text_it >= len(
+                            text_neat
+                        ):  # translated text is one row shorter
+                            text_neat.append("")
+                        if verbose:
+                            print(
+                                pages["list"][j]["parameters"][0],
+                                "->",
+                                text_neat[text_it],
+                            )
+                        pages["list"][j]["parameters"][0] = text_neat[text_it]
+                was_401 = False
+                code_401_text = []
+            # 102 Choices (dont nestly translate) (ex: [["yes", "no"], 1, 0, 2, 0])
+            if page_list["code"] == 102:
+                # null or empty list check
+                if not page_list["parameters"][0]:
+                    return
+                # translate list
+                for j, choice in enumerate(page_list["parameters"][0]):
+                    # null or empty string check
+                    if not choice:
+                        print(
+                            "Anomaly choices - Unexpected 102 code: {}".format(
+                                choice
+                            )
+                        )
+                        continue
+                    # translate
+                    (
+                        page_list["parameters"][0][j],
+                        success,
+                    ) = await try_translate_sentence(choice)
+                    if not success:
+                        print("Anomaly choices: {}".format(choice))
+                    else:
+                        translations += 1
+
+            # 402 Choices (answer) (dont nestly translate) (ex: [0, "yes"])
+            elif page_list["code"] == 402:
+                # invalid length null or empty string check
+                if (
+                    len(page_list["parameters"]) != 2
+                    or not page_list["parameters"][1]
+                ):
+                    print(
+                        "Anomaly choices (answer) - Unexpected 402 Code: {}".format(
+                            page_list["parameters"]
+                        )
+                    )
+                    return
+                # translate
+                page_list["parameters"][1], success = (
+                    await try_translate_sentence(page_list["parameters"][1])
+                )
+                if not success:
+                    print(
+                        "Anomaly choices (answer): {}".format(
+                            page_list["parameters"][1]
+                        )
+                    )
+                else:
+                    translations += 1
+
+            # 401 Plain text (to nestly translate) (ex: ["plain text"])
+            elif page_list["code"] == 401:
+                was_401 = True
+                code_401_text.append(page_list["parameters"][0])
+                return
+
     translations = 0
+    translate_neatly_lock = asyncio.Lock()
     with open(file_path, "r", encoding="utf-8-sig") as datafile:
         data = json.load(datafile)
     num_events = len([e for e in data["events"] if e is not None])
@@ -163,102 +259,10 @@ async def translate_neatly(
         for pages in events["pages"]:
             was_401 = False
             code_401_text: list[str] = []
-            for page_list_i, page_list in enumerate(pages["list"]):
-                if was_401 and page_list["code"] != 401:
-                    text = " ".join(code_401_text)
-                    if not text:
-                        continue
-                    # translate
-                    text_tr, success = await try_translate_sentence(text)
-                    if (not success) or (text_tr is None):
-                        print("Anomaly: {}".format(text))
-                    else:
-                        try:
-                            text_neat = print_neatly(text_tr, max_len)
-                        except:
-                            text_neat = text_tr
-                        for text_it, j in enumerate(
-                            range(
-                                page_list_i - len(code_401_text),
-                                page_list_i,
-                            )
-                        ):
-                            print(j)
-                            translations += 1
-                            if text_it >= len(
-                                text_neat
-                            ):  # translated text is one row shorter
-                                text_neat.append("")
-                            if verbose:
-                                print(
-                                    pages["list"][j]["parameters"][0],
-                                    "->",
-                                    text_neat[text_it],
-                                )
-                            pages["list"][j]["parameters"][0] = text_neat[
-                                text_it
-                            ]
-                        print()
-                    was_401 = False
-                    code_401_text = []
-                # 102 Choices (dont nestly translate) (ex: [["yes", "no"], 1, 0, 2, 0])
-                if page_list["code"] == 102:
-                    # null or empty list check
-                    if not page_list["parameters"][0]:
-                        continue
-                    # translate list
-                    for j, choice in enumerate(page_list["parameters"][0]):
-                        # null or empty string check
-                        if not choice:
-                            print(
-                                "Anomaly choices - Unexpected 102 code: {}".format(
-                                    choice
-                                )
-                            )
-                            continue
-                        # translate
-                        (
-                            page_list["parameters"][0][j],
-                            success,
-                        ) = await try_translate_sentence(choice)
-                        if not success:
-                            print("Anomaly choices: {}".format(choice))
-                        else:
-                            translations += 1
 
-                # 402 Choices (answer) (dont nestly translate) (ex: [0, "yes"])
-                elif page_list["code"] == 402:
-                    # invalid length null or empty string check
-                    if (
-                        len(page_list["parameters"]) != 2
-                        or not page_list["parameters"][1]
-                    ):
-                        print(
-                            "Anomaly choices (answer) - Unexpected 402 Code: {}".format(
-                                page_list["parameters"]
-                            )
-                        )
-                        continue
-                    # translate
-                    page_list["parameters"][1], success = (
-                        await try_translate_sentence(
-                            page_list["parameters"][1]
-                        )
-                    )
-                    if not success:
-                        print(
-                            "Anomaly choices (answer): {}".format(
-                                page_list["parameters"][1]
-                            )
-                        )
-                    else:
-                        translations += 1
-
-                # 401 Plain text (to nestly translate) (ex: ["plain text"])
-                elif page_list["code"] == 401:
-                    was_401 = True
-                    code_401_text.append(page_list["parameters"][0])
-                    continue
+            async with asyncio.TaskGroup() as tg:
+                for page_list_i, page_list in enumerate(pages["list"]):
+                    tg.create_task(translate_list(page_list, page_list_i))
 
     return data, translations
 
@@ -416,6 +420,18 @@ async def main():
             tg.create_task(translate_file(file))
     print("\ndone! translated in total {} dialog windows".format(translations))
 
+
+# usage: python dialogs_translator.py --print_neatly --source_lang it --dest_lang en
+if __name__ == "__main__":
+    asyncio.run(main())
+
+# usage: python dialogs_translator.py --print_neatly --source_lang it --dest_lang en
+if __name__ == "__main__":
+    asyncio.run(main())
+
+# usage: python dialogs_translator.py --print_neatly --source_lang it --dest_lang en
+if __name__ == "__main__":
+    asyncio.run(main())
 
 # usage: python dialogs_translator.py --print_neatly --source_lang it --dest_lang en
 if __name__ == "__main__":
