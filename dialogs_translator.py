@@ -4,12 +4,10 @@ import copy
 import json
 import os
 
+import tqdm
 from googletrans import Translator  # pip install googletrans==4.0.0rc1
 
 from print_neatly import print_neatly
-
-translations = 0
-lock = asyncio.Lock()
 
 
 async def translate(
@@ -280,74 +278,75 @@ async def translate_neatly_common_events(
         text = translation
         return text
 
+    async def translate_list(event_list, event_list_i: int):
+        nonlocal was_401, code_401_text, translations
+        async with translate_common_events:
+            if "code" not in event_list.keys():
+                return
+            if was_401 and event_list["code"] != 401:
+                text = " ".join(code_401_text)
+                if not text:
+                    return
+                text_tr = None
+                try:
+                    text_tr = await translate_sentence(text)
+                except:
+                    for _ in range(max_retries):
+                        try:
+                            await asyncio.sleep(1)
+                            text_tr = translate_sentence(text)
+                        except:
+                            pass
+                        if text_tr is not None:
+                            return
+                if text_tr is None:
+                    print("Anomaly: {}".format(text))
+                else:
+                    try:
+                        text_neat = print_neatly(text_tr, max_len)
+                    except:
+                        text_neat = text_tr
+                    for text_it, j in enumerate(
+                        range(event_list_i - len(code_401_text), event_list_i)
+                    ):
+                        translations += 1
+                        if text_it >= len(text_neat):
+                            text_neat.append("")
+                        if verbose:
+                            print(
+                                d["list"][j]["parameters"][0],
+                                "->",
+                                text_neat[text_it],
+                            )
+                        d["list"][j]["parameters"][0] = text_neat[text_it]
+                was_401 = False
+                code_401_text = []
+            if event_list["code"] == 401:
+                was_401 = True
+                code_401_text.append(event_list["parameters"][0])
+
     translations = 0
+    translate_common_events = asyncio.Lock()
     with open(file_path, "r", encoding="utf-8-sig") as datafile:
         data = json.load(datafile)
     num_ids = len([e for e in data if e is not None])
     i = 0
     for d in data:
-        if d is not None:
-            print("{}: {}/{}".format(file_path, i + 1, num_ids))
-            i += 1
-            list_it = 0
-            len_list = len(d["list"])
-            while list_it < len_list:
-                if (
-                    "code" in d["list"][list_it].keys()
-                    and d["list"][list_it]["code"] == 401
-                ):
-                    list_it_2 = list_it + 1
-                    text = copy.deepcopy(d["list"][list_it]["parameters"])
-                    while (
-                        "code" in d["list"][list_it].keys()
-                        and d["list"][list_it_2]["code"] == 401
-                    ):
-                        text.append(d["list"][list_it_2]["parameters"][0])
-                        list_it_2 += 1
-                    text = " ".join(text)
-                    # empty string check
-                    if not text:
-                        list_it = list_it_2
-                        continue
-                    text_tr = None
-                    try:
-                        text_tr = translate_sentence(text)
-                    except:
-                        for _ in range(max_retries):
-                            try:
-                                await asyncio.sleep(1)
-                                text_tr = translate_sentence(text)
-                            except:
-                                pass
-                            if text_tr is not None:
-                                break
-                    if text_tr is None:
-                        print("Anomaly: {}".format(text))
-                    else:
-                        try:
-                            text_neat = print_neatly(text_tr, max_len)
-                        except:
-                            text_neat = text_tr
-                        for text_it, j in enumerate(range(list_it, list_it_2)):
-                            translations += 1
-                            if text_it >= len(text_neat):
-                                text_neat.append("")
-                            if verbose:
-                                print(
-                                    d["list"][j]["parameters"][0],
-                                    "->",
-                                    text_neat[text_it],
-                                )
-                            d["list"][j]["parameters"][0] = text_neat[text_it]
-                    list_it = list_it_2
-                else:
-                    list_it += 1
+        if d is None:
+            continue
+        print("{}: {}/{}".format(file_path, i + 1, num_ids))
+        i += 1
+        was_401 = False
+        code_401_text: list[str] = []
+        async with asyncio.TaskGroup() as tg:
+            for event_list_i, event_list in enumerate(d["list"]):
+                tg.create_task(translate_list(event_list, event_list_i))
     return data, translations
 
 
 async def main():
     async def translate_file(file: str):
-        global translations
+        nonlocal translations
         file_path = os.path.join(args.input_folder, file)
         if os.path.isfile(os.path.join(dest_folder, file)):
             print(
@@ -410,6 +409,8 @@ async def main():
     ap.add_argument("-mr", "--max_retries", type=int, default=10)
     args = ap.parse_args()
     dest_folder = args.input_folder + "_" + args.dest_lang
+    translations = 0
+    lock = asyncio.Lock()
     if not os.path.exists(dest_folder):
         os.makedirs(dest_folder)
     async with asyncio.TaskGroup() as tg:

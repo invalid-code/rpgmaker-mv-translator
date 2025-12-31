@@ -95,7 +95,7 @@ Example of **print neatly** with `max_len=32` translating from english to italia
 
 1. Copy the files you want to translate among `Armors.json`, `Weapons.json`, `Items.json`, `Skills.json`, `Enemies.json`, `MapInfos.json`, `Classes.json`, `States.json`, `Actors.json`
    from you game `data/` folder to this project `object` folder.
-3. For a basic usage, run the command:
+2. For a basic usage, run the command:
 ```
   python objects_translator.py --source_lang it --dest_lang en
 ```
