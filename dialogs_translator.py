@@ -1,11 +1,12 @@
 import argparse
 import asyncio
-import copy
+# import copy
 import json
 import os
 
-import tqdm
+import aiofiles
 from googletrans import Translator  # pip install googletrans==4.0.0rc1
+from tqdm import tqdm
 
 from print_neatly import print_neatly
 
@@ -25,7 +26,8 @@ async def translate(
             translation = translation[0].lower() + translation[1:]
         text = translation
         if verbose:
-            print(target, "->", translation)
+            pass
+            # print(target, "->", translation)
         return text
 
     async def try_translate_sentence(text):
@@ -40,83 +42,93 @@ async def translate(
                     pass
             return (text, False)
 
+    async def translate_list(page_list):
+        nonlocal translations
+        async with translate_lock:
+            # Plain text (ex: ["plain text"])
+            if page_list["code"] == 401:
+                # null or empty string check
+                if not page_list["parameters"][0]:
+                    return
+                # translate
+                (
+                    page_list["parameters"][0],
+                    success,
+                ) = await try_translate_sentence(page_list["parameters"][0])
+                if not success:
+                    pass
+                    # print(
+                    #     "Anomaly plain text: {}".format(
+                    #         page_list["parameters"][0]
+                    #     )
+                    # )
+                else:
+                    translations += 1
+
+            # Choices (ex: [["yes", "no"], 1, 0, 2, 0])
+            elif page_list["code"] == 102:
+                # null or empty list check
+                if not page_list["parameters"][0]:
+                    return
+                # translate list
+                for j, choice in enumerate(page_list["parameters"][0]):
+                    # null or empty string check
+                    if not choice:
+                        return
+                    # translate
+                    (
+                        page_list["parameters"][0][j],
+                        success,
+                    ) = await try_translate_sentence(choice)
+                    if not success:
+                        pass
+                        # print("Anomaly choices: {}".format(choice))
+                    else:
+                        translations += 1
+
+            # Choices (answer) (ex: [0, "yes"])
+            elif page_list["code"] == 402:
+                # invalid length null or empty string check
+                if (
+                    len(page_list["parameters"]) != 2
+                    or not page_list["parameters"][1]
+                ):
+                    # print(
+                    #     "Anomaly choices (answer) - Unexpected 402 Code: {}".format(
+                    #         page_list["parameters"]
+                    #     )
+                    # )
+                    return
+                # translate
+                (
+                    page_list["parameters"][1],
+                    success,
+                ) = await try_translate_sentence(page_list["parameters"][1])
+                if not success:
+                    pass
+                    # print(
+                    #     "Anomaly choices (answer): {}".format(
+                    #         page_list["parameters"][1]
+                    #     )
+                    # )
+                else:
+                    translations += 1
+
     translations = 0
-    with open(file_path, "r", encoding="utf-8-sig") as datafile:
-        data = json.load(datafile)
+    translate_lock = asyncio.Lock()
+    async with aiofiles.open(file_path, "r", encoding="utf-8-sig") as datafile:
+        data = json.loads(await datafile.read())
     num_events = len([e for e in data["events"] if e is not None])
     i = 0
-    for events in data["events"]:
-        if events is not None:
-            print("{}: {}/{}".format(file_path, i + 1, num_events))
+    async with asyncio.TaskGroup() as tg:
+        for event in data["events"]:
+            if event is None:
+                continue
+            # print("{}: {}/{}".format(file_path, i + 1, num_events))
             i += 1
-            for pages in events["pages"]:
-                for list in pages["list"]:
-
-                    # Plain text (ex: ["plain text"])
-                    if list["code"] == 401:
-                        # null or empty string check
-                        if not list["parameters"][0]:
-                            continue
-                        # translate
-                        (
-                            list["parameters"][0],
-                            success,
-                        ) = await try_translate_sentence(list["parameters"][0])
-                        if not success:
-                            print(
-                                "Anomaly plain text: {}".format(
-                                    list["parameters"][0]
-                                )
-                            )
-                        else:
-                            translations += 1
-
-                    # Choices (ex: [["yes", "no"], 1, 0, 2, 0])
-                    elif list["code"] == 102:
-                        # null or empty list check
-                        if not list["parameters"][0]:
-                            continue
-                        # translate list
-                        for j, choice in enumerate(list["parameters"][0]):
-                            # null or empty string check
-                            if not choice:
-                                continue
-                            # translate
-                            (
-                                list["parameters"][0][j],
-                                success,
-                            ) = await try_translate_sentence(choice)
-                            if not success:
-                                print("Anomaly choices: {}".format(choice))
-                            else:
-                                translations += 1
-
-                    # Choices (answer) (ex: [0, "yes"])
-                    elif list["code"] == 402:
-                        # invalid length null or empty string check
-                        if (
-                            len(list["parameters"]) != 2
-                            or not list["parameters"][1]
-                        ):
-                            print(
-                                "Anomaly choices (answer) - Unexpected 402 Code: {}".format(
-                                    list["parameters"]
-                                )
-                            )
-                            continue
-                        # translate
-                        (
-                            list["parameters"][1],
-                            success,
-                        ) = await try_translate_sentence(list["parameters"][1])
-                        if not success:
-                            print(
-                                "Anomaly choices (answer): {}".format(
-                                    list["parameters"][1]
-                                )
-                            )
-                        else:
-                            translations += 1
+            for page in event["pages"]:
+                for page_list in page["list"]:
+                    tg.create_task(translate_list(page_list))
     return data, translations
 
 
@@ -147,7 +159,7 @@ async def translate_neatly(
                     pass
             return (text, False)
 
-    async def translate_list(page_list, page_list_i: int):
+    async def translate_list(page_list, page_list_i: int, page):
         nonlocal translations, code_401_text, was_401
         async with translate_neatly_lock:
             if was_401 and page_list["code"] != 401:
@@ -157,7 +169,8 @@ async def translate_neatly(
                 # translate
                 text_tr, success = await try_translate_sentence(text)
                 if (not success) or (text_tr is None):
-                    print("Anomaly: {}".format(text))
+                    pass
+                    # print("Anomaly: {}".format(text))
                 else:
                     try:
                         text_neat = print_neatly(text_tr, max_len)
@@ -175,12 +188,13 @@ async def translate_neatly(
                         ):  # translated text is one row shorter
                             text_neat.append("")
                         if verbose:
-                            print(
-                                pages["list"][j]["parameters"][0],
-                                "->",
-                                text_neat[text_it],
-                            )
-                        pages["list"][j]["parameters"][0] = text_neat[text_it]
+                            pass
+                            # print(
+                            #     page["list"][j]["parameters"][0],
+                            #     "->",
+                            #     text_neat[text_it],
+                            # )
+                        page["list"][j]["parameters"][0] = text_neat[text_it]
                 was_401 = False
                 code_401_text = []
             # 102 Choices (dont nestly translate) (ex: [["yes", "no"], 1, 0, 2, 0])
@@ -192,11 +206,11 @@ async def translate_neatly(
                 for j, choice in enumerate(page_list["parameters"][0]):
                     # null or empty string check
                     if not choice:
-                        print(
-                            "Anomaly choices - Unexpected 102 code: {}".format(
-                                choice
-                            )
-                        )
+                        # print(
+                        #     "Anomaly choices - Unexpected 102 code: {}".format(
+                        #         choice
+                        #     )
+                        # )
                         continue
                     # translate
                     (
@@ -204,7 +218,8 @@ async def translate_neatly(
                         success,
                     ) = await try_translate_sentence(choice)
                     if not success:
-                        print("Anomaly choices: {}".format(choice))
+                        pass
+                        # print("Anomaly choices: {}".format(choice))
                     else:
                         translations += 1
 
@@ -215,22 +230,23 @@ async def translate_neatly(
                     len(page_list["parameters"]) != 2
                     or not page_list["parameters"][1]
                 ):
-                    print(
-                        "Anomaly choices (answer) - Unexpected 402 Code: {}".format(
-                            page_list["parameters"]
-                        )
-                    )
+                    # print(
+                    #     "Anomaly choices (answer) - Unexpected 402 Code: {}".format(
+                    #         page_list["parameters"]
+                    #     )
+                    # )
                     return
                 # translate
                 page_list["parameters"][1], success = (
                     await try_translate_sentence(page_list["parameters"][1])
                 )
                 if not success:
-                    print(
-                        "Anomaly choices (answer): {}".format(
-                            page_list["parameters"][1]
-                        )
-                    )
+                    pass
+                    # print(
+                    #     "Anomaly choices (answer): {}".format(
+                    #         page_list["parameters"][1]
+                    #     )
+                    # )
                 else:
                     translations += 1
 
@@ -242,22 +258,23 @@ async def translate_neatly(
 
     translations = 0
     translate_neatly_lock = asyncio.Lock()
-    with open(file_path, "r", encoding="utf-8-sig") as datafile:
-        data = json.load(datafile)
+    async with aiofiles.open(file_path, "r", encoding="utf-8-sig") as datafile:
+        data = json.loads(await datafile.read())
     num_events = len([e for e in data["events"] if e is not None])
     i = 0
-    for events in data["events"]:
-        if events is None:
-            continue
-        print("{}: {}/{}".format(file_path, i + 1, num_events))
-        i += 1
-        for pages in events["pages"]:
-            was_401 = False
-            code_401_text: list[str] = []
-
-            async with asyncio.TaskGroup() as tg:
-                for page_list_i, page_list in enumerate(pages["list"]):
-                    tg.create_task(translate_list(page_list, page_list_i))
+    async with asyncio.TaskGroup() as tg:
+        for event in data["events"]:
+            if event is None:
+                continue
+            # print("{}: {}/{}".format(file_path, i + 1, num_events))
+            i += 1
+            for page in event["pages"]:
+                was_401 = False
+                code_401_text: list[str] = []
+                for page_list_i, page_list in enumerate(page["list"]):
+                    tg.create_task(
+                        translate_list(page_list, page_list_i, page)
+                    )
 
     return data, translations
 
@@ -278,7 +295,7 @@ async def translate_neatly_common_events(
         text = translation
         return text
 
-    async def translate_list(event_list, event_list_i: int):
+    async def translate_list(event_list, event_list_i: int, d):
         nonlocal was_401, code_401_text, translations
         async with translate_common_events:
             if "code" not in event_list.keys():
@@ -294,13 +311,14 @@ async def translate_neatly_common_events(
                     for _ in range(max_retries):
                         try:
                             await asyncio.sleep(1)
-                            text_tr = translate_sentence(text)
+                            text_tr = await translate_sentence(text)
                         except:
                             pass
                         if text_tr is not None:
                             return
                 if text_tr is None:
-                    print("Anomaly: {}".format(text))
+                    pass
+                    # print("Anomaly: {}".format(text))
                 else:
                     try:
                         text_neat = print_neatly(text_tr, max_len)
@@ -313,11 +331,12 @@ async def translate_neatly_common_events(
                         if text_it >= len(text_neat):
                             text_neat.append("")
                         if verbose:
-                            print(
-                                d["list"][j]["parameters"][0],
-                                "->",
-                                text_neat[text_it],
-                            )
+                            pass
+                            # print(
+                            #     d["list"][j]["parameters"][0],
+                            #     "->",
+                            #     text_neat[text_it],
+                            # )
                         d["list"][j]["parameters"][0] = text_neat[text_it]
                 was_401 = False
                 code_401_text = []
@@ -327,36 +346,36 @@ async def translate_neatly_common_events(
 
     translations = 0
     translate_common_events = asyncio.Lock()
-    with open(file_path, "r", encoding="utf-8-sig") as datafile:
-        data = json.load(datafile)
+    async with aiofiles.open(file_path, "r", encoding="utf-8-sig") as datafile:
+        data = json.loads(await datafile.read())
     num_ids = len([e for e in data if e is not None])
     i = 0
-    for d in data:
-        if d is None:
-            continue
-        print("{}: {}/{}".format(file_path, i + 1, num_ids))
-        i += 1
-        was_401 = False
-        code_401_text: list[str] = []
-        async with asyncio.TaskGroup() as tg:
+    async with asyncio.TaskGroup() as tg:
+        for d in data:
+            if d is None:
+                continue
+            # print("{}: {}/{}".format(file_path, i + 1, num_ids))
+            i += 1
+            was_401 = False
+            code_401_text: list[str] = []
             for event_list_i, event_list in enumerate(d["list"]):
-                tg.create_task(translate_list(event_list, event_list_i))
+                tg.create_task(translate_list(event_list, event_list_i, d))
     return data, translations
 
 
 async def main():
-    async def translate_file(file: str):
+    async def translate_file(file: str, pbar: tqdm):
         nonlocal translations
         file_path = os.path.join(args.input_folder, file)
         if os.path.isfile(os.path.join(dest_folder, file)):
-            print(
-                "skipped file {} because it has already been translated".format(
-                    file_path
-                )
-            )
+            # print(
+            #     "skipped file {} because it has already been translated".format(
+            #         file_path
+            #     )
+            # )
             return
         if file.endswith(".json"):
-            print("translating file: {}".format(file_path))
+            # print("translating file: {}".format(file_path))
             if file.startswith("Map"):
                 if args.print_neatly:
                     new_data, t = await translate_neatly(
@@ -390,11 +409,14 @@ async def main():
             async with lock:
                 translations += t
             new_file = os.path.join(dest_folder, file)
-            with open(new_file, "w", encoding="utf-8") as f:
+            async with aiofiles.open(new_file, "w", encoding="utf-8") as f:
                 if not args.no_format:
-                    json.dump(new_data, f, indent=4, ensure_ascii=False)
+                    await f.write(
+                        json.dumps(new_data, indent=4, ensure_ascii=False)
+                    )
                 else:
-                    json.dump(new_data, f, ensure_ascii=False)
+                    await f.write(json.dumps(new_data, ensure_ascii=False))
+        pbar.update(1)
 
     ap = argparse.ArgumentParser()
     ap.add_argument("-i", "--input_folder", type=str, default="dialogs")
@@ -411,12 +433,14 @@ async def main():
     dest_folder = args.input_folder + "_" + args.dest_lang
     translations = 0
     lock = asyncio.Lock()
+    input_files = os.listdir(args.input_folder)
     if not os.path.exists(dest_folder):
         os.makedirs(dest_folder)
-    async with asyncio.TaskGroup() as tg:
-        for file in os.listdir(args.input_folder):
-            tg.create_task(translate_file(file))
-    print("\ndone! translated in total {} dialog windows".format(translations))
+    with tqdm(total=len(input_files), desc="Overall") as pbar:
+        async with asyncio.TaskGroup() as tg:
+            for file in input_files:
+                tg.create_task(translate_file(file, pbar))
+    # print("\ndone! translated in total {} dialog windows".format(translations))
 
 
 # usage: python dialogs_translator.py --print_neatly --source_lang it --dest_lang en
