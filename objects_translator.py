@@ -3,7 +3,9 @@ import asyncio
 import json
 import os
 
+import aiofiles
 from googletrans import Translator  # pip install googletrans==4.0.0rc1
+from tqdm import tqdm
 
 from print_neatly import print_neatly
 
@@ -23,7 +25,8 @@ async def translate(
             translation = translation[0].lower() + translation[1:]
         text = translation
         if verbose:
-            print(target, "->", translation)
+            pass
+            # print(target, "->", translation)
         return text
 
     async def translate_and_check(
@@ -44,7 +47,7 @@ async def translate(
                 if text_tr is not None:
                     break
         if text_tr is None:
-            print("Anomaly: {}".format(text))
+            # print("Anomaly: {}".format(text))
             return None, 0
         if neatly:
             try:
@@ -63,11 +66,30 @@ async def translate(
     async def translate_based_on_keys(
         dict_or_list,
         keys,
+        tg: asyncio.TaskGroup,
         translations=0,
         remove_escape=True,
         neatly=False,
         array_translate=False,
     ):
+        async def translate_dict(d, dict_or_list):
+            nonlocal translations
+            tr, success = await translate_and_check(
+                dict_or_list[d], remove_escape, neatly
+            )
+            dict_or_list[d] = tr
+            async with translate_lock:
+                translations += success
+
+        async def translate_list(i: int, dict_or_list):
+            nonlocal translations
+            tr, success = await translate_and_check(
+                dict_or_list[i], remove_escape, neatly
+            )
+            dict_or_list[i] = tr
+            async with translate_lock:
+                translations += success
+
         if isinstance(dict_or_list, dict):
             for d in dict_or_list:
                 if isinstance(dict_or_list[d], dict) or isinstance(
@@ -76,17 +98,14 @@ async def translate(
                     translations += await translate_based_on_keys(
                         dict_or_list[d],
                         keys,
+                        tg,
                         translations,
                         remove_escape,
                         neatly,
                         array_translate,
                     )
                 elif d in keys and len(dict_or_list[d]) > 0:
-                    tr, success = await translate_and_check(
-                        dict_or_list[d], remove_escape, neatly
-                    )
-                    dict_or_list[d] = tr
-                    translations += success
+                    tg.create_task(translate_dict(d, dict_or_list))
         elif isinstance(dict_or_list, list):
             for i in range(len(dict_or_list)):
                 if isinstance(dict_or_list[i], dict) or isinstance(
@@ -95,6 +114,7 @@ async def translate(
                     translations += await translate_based_on_keys(
                         dict_or_list[i],
                         keys,
+                        tg,
                         translations,
                         remove_escape,
                         neatly,
@@ -105,19 +125,16 @@ async def translate(
                     and isinstance(dict_or_list[i], str)
                     and len(dict_or_list[i]) > 0
                 ):
-                    tr, success = await translate_and_check(
-                        dict_or_list[i], remove_escape, neatly
-                    )
-                    dict_or_list[i] = tr
-                    translations += success
+                    tg.create_task(translate_list(i, dict_or_list))
+
         return translations
 
     async def translate_non_key_based(d):
         nonlocal translations, i
         if d is None:
             return
-        async with translate_non_key_based_lock:
-            print("{}: {}/{}".format(file_path, i + 1, num_ids))
+        async with translate_lock:
+            # print("{}: {}/{}".format(file_path, i + 1, num_ids))
             i += 1
         if "name" in d.keys():
             if d["name"] == "":
@@ -126,7 +143,7 @@ async def translate(
                 d["name"], remove_escape=True, neatly=False
             )
             d["name"] = name_tr
-            async with translate_non_key_based_lock:
+            async with translate_lock:
                 translations += success
         if "description" in d.keys():
             if d["description"] == "":
@@ -135,7 +152,7 @@ async def translate(
                 d["description"], remove_escape=True, neatly=True
             )
             d["description"] = desc_tr
-            async with translate_non_key_based_lock:
+            async with translate_lock:
                 translations += success
         if "profile" in d.keys():
             if d["profile"] == "":
@@ -144,7 +161,7 @@ async def translate(
                 d["profile"], remove_escape=True, neatly=True
             )
             d["profile"] = prf_tr
-            async with translate_non_key_based_lock:
+            async with translate_lock:
                 translations += success
         for m in range(1, 5):
             message = "message" + str(m)
@@ -153,30 +170,35 @@ async def translate(
                     d[message], remove_escape=False, neatly=False
                 )
                 d[message] = message_tr
-                async with translate_non_key_based_lock:
+                async with translate_lock:
                     translations += success
 
     translations = 0
-    with open(file_path, "r", encoding="utf-8-sig") as datafile:
-        data = json.load(datafile)
+    async with aiofiles.open(file_path, "r", encoding="utf-8-sig") as datafile:
+        data = json.loads(await datafile.read())
     num_ids = len([e for e in data if e is not None])
     i = 0
-    translate_non_key_based_lock = asyncio.Lock()
+    translate_lock = asyncio.Lock()
 
-    if file_path.endswith("GalleryList.json"):
-        translations += await translate_based_on_keys(
-            data,
-            ["displayName", "hint", "stageText", "sceneText", "text"],
-            translations,
-        )
+    async with asyncio.TaskGroup() as tg:
+        if file_path.endswith("GalleryList.json"):
+            translations += await translate_based_on_keys(
+                data,
+                ["displayName", "hint", "stageText", "sceneText", "text"],
+                tg,
+                translations,
+            )
 
-    elif file_path.endswith("RubiList.json"):
-        translations += await translate_based_on_keys(
-            data, [], translations, array_translate=True
-        )
+        elif file_path.endswith("RubiList.json"):
+            translations += await translate_based_on_keys(
+                data,
+                [],
+                tg,
+                translations,
+                array_translate=True,
+            )
 
-    else:
-        async with asyncio.TaskGroup() as tg:
+        else:
             for d in data:
                 tg.create_task(translate_non_key_based(d))
 
@@ -184,18 +206,18 @@ async def translate(
 
 
 async def main():
-    async def translate_file(file):
+    async def translate_file(file, pbar: tqdm):
         nonlocal translations
         file_path = os.path.join(args.input_folder, file)
         if os.path.isfile(os.path.join(dest_folder, file)):
-            print(
-                "skipped file {} because it has already been translated".format(
-                    file_path
-                )
-            )
+            # print(
+            #     "skipped file {} because it has already been translated".format(
+            #         file_path
+            #     )
+            # )
             return
         if file.endswith(".json"):
-            print("translating file: {}".format(file_path))
+            # print("translating file: {}".format(file_path))
             new_data, t = await translate(
                 file_path,
                 tr=Translator(),
@@ -208,11 +230,14 @@ async def main():
             async with translate_file_lock:
                 translations += t
             new_file = os.path.join(dest_folder, file)
-            with open(new_file, "w", encoding="utf-8") as f:
+            async with aiofiles.open(new_file, "w", encoding="utf-8") as f:
                 if not args.no_format:
-                    json.dump(new_data, f, indent=4, ensure_ascii=False)
+                    await f.write(
+                        json.dumps(new_data, indent=4, ensure_ascii=False)
+                    )
                 else:
-                    json.dump(new_data, f, ensure_ascii=False)
+                    await f.write(json.dumps(new_data, ensure_ascii=False))
+        pbar.update(1)
 
     ap = argparse.ArgumentParser()
     ap.add_argument("-i", "--input_folder", type=str, default="objects")
@@ -228,10 +253,12 @@ async def main():
     translate_file_lock = asyncio.Lock()
     if not os.path.exists(dest_folder):
         os.makedirs(dest_folder)
-    async with asyncio.TaskGroup() as tg:
-        for file in os.listdir(args.input_folder):
-            tg.create_task(translate_file(file))
-    print("\ndone! translated in total {} strings".format(translations))
+    input_files = os.listdir(args.input_folder)
+    with tqdm(total=len(input_files), desc="Overall") as pbar:
+        async with asyncio.TaskGroup() as tg:
+            for file in input_files:
+                tg.create_task(translate_file(file, pbar))
+    # print("\ndone! translated in total {} strings".format(translations))
 
 
 # usage: python objects_translator.py --source_lang it --dest_lang en
