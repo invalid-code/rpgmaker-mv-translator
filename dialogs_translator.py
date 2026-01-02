@@ -1,7 +1,7 @@
 import argparse
 import asyncio
-# import copy
 import json
+import logging
 import os
 
 import aiofiles
@@ -9,6 +9,15 @@ from googletrans import Translator  # pip install googletrans==4.0.0rc1
 from tqdm import tqdm
 
 from print_neatly import print_neatly
+
+logging.basicConfig(
+    level=logging.WARNING,
+    filename="app.log",
+    filemode="w",
+    format="%(asctime)s %(name)s - %(levelname)s - %(message)s",
+)
+
+logger = logging.getLogger(__name__)
 
 
 async def translate(
@@ -26,8 +35,7 @@ async def translate(
             translation = translation[0].lower() + translation[1:]
         text = translation
         if verbose:
-            pass
-            # print(target, "->", translation)
+            logger.info(f"{target} -> {translation}")
         return text
 
     async def try_translate_sentence(text):
@@ -56,12 +64,9 @@ async def translate(
                     success,
                 ) = await try_translate_sentence(page_list["parameters"][0])
                 if not success:
-                    pass
-                    # print(
-                    #     "Anomaly plain text: {}".format(
-                    #         page_list["parameters"][0]
-                    #     )
-                    # )
+                    logger.warning(
+                        f"Anomaly plain text: {page_list['parameters'][0]}"
+                    )
                 else:
                     translations += 1
 
@@ -81,8 +86,7 @@ async def translate(
                         success,
                     ) = await try_translate_sentence(choice)
                     if not success:
-                        pass
-                        # print("Anomaly choices: {}".format(choice))
+                        logger.warning(f"Anomaly choices: {choice}")
                     else:
                         translations += 1
 
@@ -93,11 +97,9 @@ async def translate(
                     len(page_list["parameters"]) != 2
                     or not page_list["parameters"][1]
                 ):
-                    # print(
-                    #     "Anomaly choices (answer) - Unexpected 402 Code: {}".format(
-                    #         page_list["parameters"]
-                    #     )
-                    # )
+                    logger.warning(
+                        f"Anomaly choices (answer) - Unexpected 402 Code: {page_list['parameters']}"
+                    )
                     return
                 # translate
                 (
@@ -105,12 +107,9 @@ async def translate(
                     success,
                 ) = await try_translate_sentence(page_list["parameters"][1])
                 if not success:
-                    pass
-                    # print(
-                    #     "Anomaly choices (answer): {}".format(
-                    #         page_list["parameters"][1]
-                    #     )
-                    # )
+                    logger.warning(
+                        f"Anomaly choices (answer): {page_list['parameters'][1]}"
+                    )
                 else:
                     translations += 1
 
@@ -124,7 +123,7 @@ async def translate(
         for event in data["events"]:
             if event is None:
                 continue
-            # print("{}: {}/{}".format(file_path, i + 1, num_events))
+            logger.info(f"{file_path}: {i + 1}/{num_events}")
             i += 1
             for page in event["pages"]:
                 for page_list in page["list"]:
@@ -169,8 +168,7 @@ async def translate_neatly(
                 # translate
                 text_tr, success = await try_translate_sentence(text)
                 if (not success) or (text_tr is None):
-                    pass
-                    # print("Anomaly: {}".format(text))
+                    logger.warning(f"Anomaly: {text}")
                 else:
                     try:
                         text_neat = print_neatly(text_tr, max_len)
@@ -186,14 +184,13 @@ async def translate_neatly(
                         if text_it >= len(
                             text_neat
                         ):  # translated text is one row shorter
-                            text_neat.append("")
+                            text_neat.append(
+                                f"{page['list'][j]['parameters'][0]} -> {text_neat[text_it]}"
+                            )
                         if verbose:
-                            pass
-                            # print(
-                            #     page["list"][j]["parameters"][0],
-                            #     "->",
-                            #     text_neat[text_it],
-                            # )
+                            logging.debug(
+                                f"{page['list'][j]['parameters'][0]} -> {text_neat[text_it]}"
+                            )
                         page["list"][j]["parameters"][0] = text_neat[text_it]
                 was_401 = False
                 code_401_text = []
@@ -206,11 +203,9 @@ async def translate_neatly(
                 for j, choice in enumerate(page_list["parameters"][0]):
                     # null or empty string check
                     if not choice:
-                        # print(
-                        #     "Anomaly choices - Unexpected 102 code: {}".format(
-                        #         choice
-                        #     )
-                        # )
+                        logger.warning(
+                            f"Anomaly choices - Unexpected 102 code: {choice}"
+                        )
                         continue
                     # translate
                     (
@@ -218,8 +213,7 @@ async def translate_neatly(
                         success,
                     ) = await try_translate_sentence(choice)
                     if not success:
-                        pass
-                        # print("Anomaly choices: {}".format(choice))
+                        logger.warning(f"Anomaly choices: {choice}")
                     else:
                         translations += 1
 
@@ -230,23 +224,18 @@ async def translate_neatly(
                     len(page_list["parameters"]) != 2
                     or not page_list["parameters"][1]
                 ):
-                    # print(
-                    #     "Anomaly choices (answer) - Unexpected 402 Code: {}".format(
-                    #         page_list["parameters"]
-                    #     )
-                    # )
+                    logger.warning(
+                        f"Anomaly choices (answer) - Unexpected 402 Code: {page_list['parameters']}"
+                    )
                     return
                 # translate
                 page_list["parameters"][1], success = (
                     await try_translate_sentence(page_list["parameters"][1])
                 )
                 if not success:
-                    pass
-                    # print(
-                    #     "Anomaly choices (answer): {}".format(
-                    #         page_list["parameters"][1]
-                    #     )
-                    # )
+                    logger.warning(
+                        f"Anomaly choices (answer): {page_list['parameters'][1]}"
+                    )
                 else:
                     translations += 1
 
@@ -266,7 +255,7 @@ async def translate_neatly(
         for event in data["events"]:
             if event is None:
                 continue
-            # print("{}: {}/{}".format(file_path, i + 1, num_events))
+            logger.info(f"{file_path}: {i + 1}/{num_events}")
             i += 1
             for page in event["pages"]:
                 was_401 = False
@@ -317,8 +306,7 @@ async def translate_neatly_common_events(
                         if text_tr is not None:
                             return
                 if text_tr is None:
-                    pass
-                    # print("Anomaly: {}".format(text))
+                    logger.warning(f"Anomaly: {text}")
                 else:
                     try:
                         text_neat = print_neatly(text_tr, max_len)
@@ -331,12 +319,9 @@ async def translate_neatly_common_events(
                         if text_it >= len(text_neat):
                             text_neat.append("")
                         if verbose:
-                            pass
-                            # print(
-                            #     d["list"][j]["parameters"][0],
-                            #     "->",
-                            #     text_neat[text_it],
-                            # )
+                            logger.debug(
+                                f"{d['list'][j]['parameters'][0]} -> {text_neat[text_it]}"
+                            )
                         d["list"][j]["parameters"][0] = text_neat[text_it]
                 was_401 = False
                 code_401_text = []
@@ -354,7 +339,7 @@ async def translate_neatly_common_events(
         for d in data:
             if d is None:
                 continue
-            # print("{}: {}/{}".format(file_path, i + 1, num_ids))
+            logger.info(f"{file_path}: {i + 1}/{num_ids}")
             i += 1
             was_401 = False
             code_401_text: list[str] = []
@@ -368,14 +353,12 @@ async def main():
         nonlocal translations
         file_path = os.path.join(args.input_folder, file)
         if os.path.isfile(os.path.join(dest_folder, file)):
-            # print(
-            #     "skipped file {} because it has already been translated".format(
-            #         file_path
-            #     )
-            # )
+            logger.info(
+                f"skipped file {file_path} because it has already been translated"
+            )
             return
         if file.endswith(".json"):
-            # print("translating file: {}".format(file_path))
+            logger.info(f"translating file: {file_path}")
             if file.startswith("Map"):
                 if args.print_neatly:
                     new_data, t = await translate_neatly(
@@ -440,7 +423,7 @@ async def main():
         async with asyncio.TaskGroup() as tg:
             for file in input_files:
                 tg.create_task(translate_file(file, pbar))
-    # print("\ndone! translated in total {} dialog windows".format(translations))
+    logger.info(f"\ndone! translated in total {translations} dialog windows")
 
 
 # usage: python dialogs_translator.py --print_neatly --source_lang it --dest_lang en

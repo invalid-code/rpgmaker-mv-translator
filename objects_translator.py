@@ -1,6 +1,7 @@
 import argparse
 import asyncio
 import json
+import logging
 import os
 
 import aiofiles
@@ -8,6 +9,15 @@ from googletrans import Translator  # pip install googletrans==4.0.0rc1
 from tqdm import tqdm
 
 from print_neatly import print_neatly
+
+logging.basicConfig(
+    level=logging.WARNING,
+    filename="app.log",
+    filemode="w",
+    format="%(asctime)s %(name)s - %(levelname)s - %(message)s",
+)
+
+logger = logging.getLogger(__name__)
 
 
 async def translate(
@@ -25,8 +35,7 @@ async def translate(
             translation = translation[0].lower() + translation[1:]
         text = translation
         if verbose:
-            pass
-            # print(target, "->", translation)
+            logger.debug(f"{target} -> {translation}")
         return text
 
     async def translate_and_check(
@@ -47,7 +56,7 @@ async def translate(
                 if text_tr is not None:
                     break
         if text_tr is None:
-            # print("Anomaly: {}".format(text))
+            logger.warning(f"Anomaly: {text}")
             return None, 0
         if neatly:
             try:
@@ -134,7 +143,7 @@ async def translate(
         if d is None:
             return
         async with translate_lock:
-            # print("{}: {}/{}".format(file_path, i + 1, num_ids))
+            logger.info("{file_path}: {i + 1}/{num_ids}")
             i += 1
         if "name" in d.keys():
             if d["name"] == "":
@@ -210,14 +219,12 @@ async def main():
         nonlocal translations
         file_path = os.path.join(args.input_folder, file)
         if os.path.isfile(os.path.join(dest_folder, file)):
-            # print(
-            #     "skipped file {} because it has already been translated".format(
-            #         file_path
-            #     )
-            # )
+            logger.info(
+                f"skipped file {file_path} because it has already been translated"
+            )
             return
         if file.endswith(".json"):
-            # print("translating file: {}".format(file_path))
+            logger.info(f"translating file: {file_path}")
             new_data, t = await translate(
                 file_path,
                 tr=Translator(),
@@ -258,7 +265,7 @@ async def main():
         async with asyncio.TaskGroup() as tg:
             for file in input_files:
                 tg.create_task(translate_file(file, pbar))
-    # print("\ndone! translated in total {} strings".format(translations))
+    logger.info(f"\ndone! translated in total {translations} strings")
 
 
 # usage: python objects_translator.py --source_lang it --dest_lang en
